@@ -5,11 +5,20 @@
 #include "../include/auth.h"
 #include "../include/chat.h"
 #include "../include/search.h"
+#include "../include/client_socket.h"
 #include <string.h>
 #include <stdio.h>
 
 int main(void)
 {
+    /* Connect to server before opening the window */
+    if (!ConnectToServer())
+    {
+        printf("ERROR: Could not connect to ChatLink server.\n");
+        printf("Make sure ChatLink_Server.exe is running first.\n");
+        return 1;
+    }
+
     InitWindow(860, 580, "ChatLink - One on One Chat");
     SetTargetFPS(60);
 
@@ -24,17 +33,16 @@ int main(void)
 
     /* Toast notification state */
     char toastMsg[128] = {0};
-    float toastTimer = 0.0f; /* Visible while > 0, counts down each frame */
-    bool toastIsOk = true;   /* true = green, false = red */
+    float toastTimer = 0.0f;
+    bool toastIsOk = true;
 
     InitWelcomeScreen(&welcomeScreen);
 
-    /* Main loop — runs at 60 FPS until window is closed */
+    /* Main loop */
     while (!WindowShouldClose())
     {
         AppScreen nextScreen = currentScreen;
 
-        /* UPDATE — call active screen's logic, handle any screen transition */
         switch (currentScreen)
         {
         case SCREEN_WELCOME:
@@ -55,6 +63,7 @@ int main(void)
             AppScreen result = UpdateAuthScreen(&authScreen, loggedInUser);
             if (result == SCREEN_CHAT)
             {
+                /* Login or registration succeeded so init chat and show welcome toast */
                 InitChatScreen(&chatScreen, loggedInUser);
                 snprintf(toastMsg, sizeof(toastMsg), "Welcome, %s!", loggedInUser);
                 toastTimer = 2.5f;
@@ -82,7 +91,7 @@ int main(void)
             }
             else if (result == SCREEN_WELCOME)
             {
-                /* Logout or account deletion — reset welcome and show goodbye toast */
+                /* Logout or account deletion so reset welcome and show goodbye toast */
                 snprintf(toastMsg, sizeof(toastMsg), "Goodbye! See you soon.");
                 toastTimer = 2.0f;
                 toastIsOk = true;
@@ -101,8 +110,7 @@ int main(void)
             AppScreen result = UpdateSearchScreen(&searchScreen, peerToOpen);
             if (result == SCREEN_CHAT)
             {
-                /* Reload messages in case new ones arrived while on search screen */
-                LoadMessages(chatScreen.allMessages, &chatScreen.allMessageCount);
+                /* LoadChatForPeer handles loading messages from server */
                 nextScreen = SCREEN_CHAT;
             }
             else
@@ -142,6 +150,8 @@ int main(void)
         EndDrawing();
     }
 
+    /* Disconnect from server before exiting */
+    DisconnectFromServer();
     CloseWindow();
     return 0;
 }

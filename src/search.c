@@ -2,15 +2,14 @@
 #include "../include/search.h"
 #include "../include/ui.h"
 #include "../include/screen.h"
-#include "../include/fileio.h"
+#include "../include/client_socket.h"
 #include <string.h>
 #include <stdio.h>
 
 #define SCREEN_W 860
 #define SCREEN_H 580
 
-/* Sets up input field and button positions, resets result state.
- * Called each time the user navigates to the Search Screen. */
+/* Sets up input field and button positions, resets result state */
 void InitSearchScreen(SearchScreen *ss, const char *currentUser)
 {
     int cx = SCREEN_W / 2;
@@ -19,31 +18,31 @@ void InitSearchScreen(SearchScreen *ss, const char *currentUser)
     ss->result = SEARCH_IDLE;
     ss->openChat = false;
     memset(ss->selectedPeer, 0, sizeof(ss->selectedPeer));
+    memset(ss->foundUser.username, 0, sizeof(ss->foundUser.username));
 
-    /* Search input field — centered, to the left of the Search button */
+    /* Search input field */
     ss->searchField = (InputField){
         .rect = {cx - 200, 220, 320, 46},
         .placeholder = "Enter username to search...",
         .isPassword = false};
 
-    /* Search button — sits to the right of the input field */
+    /* Search button */
     ss->searchBtn = (Button){
         .rect = {cx + 130, 220, 110, 46},
         .label = "Search"};
 
-    /* Back button — top left corner */
+    /* Back button */
     ss->backBtn = (Button){
         .rect = {20, 20, 110, 38},
         .label = "< Back"};
 
-    /* Open Chat button — shown only when a user is found */
+    /* Open Chat button */
     ss->chatBtn = (Button){
         .rect = {cx - 80, 370, 160, 44},
         .label = "Open Chat"};
 }
 
-/* Handles search logic and button clicks.
- * Writes the found username into peerToOpen when Open Chat is clicked. */
+/* Handles search logic and button clicks. Sends SEARCHUSER request to server instead of loading users from file. Writes the found username into peerToOpen when Open Chat is clicked */
 AppScreen UpdateSearchScreen(SearchScreen *ss, char *peerToOpen)
 {
     /* Activate field on click */
@@ -61,32 +60,38 @@ AppScreen UpdateSearchScreen(SearchScreen *ss, char *peerToOpen)
     {
         const char *query = ss->searchField.text;
 
-        /* Self-search is not allowed */
+        /* Self-search is not allowed — check locally before sending */
         if (strcmp(query, ss->currentUser) == 0)
         {
             ss->result = SEARCH_NOT_FOUND;
         }
         else
         {
-            /* Load all users and scan for a matching username */
-            User users[MAX_USERS];
-            int count = 0;
-            LoadUsers(users, &count);
+            /* SEARCHUSER request - Send: "SEARCHUSER:query:currentUser", server replies: "FOUND:username" or "NOTFOUND" */
+            char request[BUFFER_SIZE];
+            char reply[BUFFER_SIZE];
+            snprintf(request, sizeof(request),
+                     "SEARCHUSER:%s:%s", query, ss->currentUser);
 
-            bool found = false;
-            for (int i = 0; i < count; i++)
+            if (!SendRequest(request, reply, sizeof(reply)))
             {
-                if (strcmp(users[i].username, query) == 0)
-                {
-                    ss->foundUser = users[i]; /* Store the matched user */
-                    ss->result = SEARCH_FOUND;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found)
+                /* Socket error — treat as not found */
                 ss->result = SEARCH_NOT_FOUND;
+            }
+            else if (strncmp(reply, "FOUND:", 6) == 0)
+            {
+                /* Parse the username from "FOUND:username" */
+                char found[MAX_USERNAME] = {0};
+                strncpy(found, reply + 6, MAX_USERNAME - 1);
+                found[strcspn(found, "\n")] = '\0';
+
+                strncpy(ss->foundUser.username, found, MAX_USERNAME - 1);
+                ss->result = SEARCH_FOUND;
+            }
+            else
+            {
+                ss->result = SEARCH_NOT_FOUND;
+            }
         }
     }
 
@@ -121,7 +126,8 @@ void DrawSearchScreen(SearchScreen *ss)
 
     /* Page title and subtitle */
     DrawCenteredText("Search Users", 80, 32, COLOR_TEXT);
-    DrawCenteredText("Find a registered user to start chatting", 122, 16, COLOR_MUTED);
+    DrawCenteredText("Find a registered user to start chatting",
+                     122, 16, COLOR_MUTED);
 
     /* Divider line below the title */
     DrawRectangle(cx - 200, 160, 440, 1, COLOR_BORDER);
@@ -135,8 +141,8 @@ void DrawSearchScreen(SearchScreen *ss)
     /* Result area — content changes based on current SearchResult state */
     if (ss->result == SEARCH_IDLE)
     {
-        /* No search yet — show prompt */
-        DrawCenteredText("Type a username and press Search", 290, 15, COLOR_MUTED);
+        DrawCenteredText("Type a username and press Search",
+                         290, 15, COLOR_MUTED);
     }
     else if (ss->result == SEARCH_NOT_FOUND)
     {
@@ -145,8 +151,10 @@ void DrawSearchScreen(SearchScreen *ss)
         int cx2 = SCREEN_W / 2 - cw / 2;
         DrawPanel(cx2, 280, cw, ch, COLOR_CARD, COLOR_BORDER);
         DrawText("✗", cx2 + 20, 280 + ch / 2 - 14, 28, COLOR_ACCENT);
-        DrawText("User not found", cx2 + 60, 280 + 16, 17, COLOR_TEXT);
-        DrawText("No registered user with that username", cx2 + 60, 280 + 40, 13, COLOR_MUTED);
+        DrawText("User not found",
+                 cx2 + 60, 280 + 16, 17, COLOR_TEXT);
+        DrawText("No registered user with that username",
+                 cx2 + 60, 280 + 40, 13, COLOR_MUTED);
     }
     else if (ss->result == SEARCH_FOUND)
     {
@@ -158,14 +166,18 @@ void DrawSearchScreen(SearchScreen *ss)
         DrawRectangle(cardX, cardY, cw, ch, COLOR_CARD);
         DrawRectangleLines(cardX, cardY, cw, ch, COLOR_TEAL);
 
-        DrawAvatar(cardX + 36, cardY + ch / 2, 22, COLOR_TEAL, ss->foundUser.username[0]);
-        DrawText(ss->foundUser.username, cardX + 68, cardY + 22, 18, COLOR_TEXT);
+        DrawAvatar(cardX + 36, cardY + ch / 2, 22,
+                   COLOR_TEAL, ss->foundUser.username[0]);
+        DrawText(ss->foundUser.username,
+                 cardX + 68, cardY + 22, 18, COLOR_TEXT);
         DrawCircle(cardX + 68, cardY + 52, 5, COLOR_GREEN);
-        DrawText("Registered & Online", cardX + 78, cardY + 44, 13, COLOR_GREEN);
+        DrawText("Registered & Online",
+                 cardX + 78, cardY + 44, 13, COLOR_GREEN);
 
         DrawButton(&ss->chatBtn, COLOR_ACCENT, WHITE);
     }
 
     /* Bottom hint */
-    DrawCenteredText("Press Enter or click Search to find a user", SCREEN_H - 30, 13, COLOR_MUTED);
+    DrawCenteredText("Press Enter or click Search to find a user",
+                     SCREEN_H - 30, 13, COLOR_MUTED);
 }

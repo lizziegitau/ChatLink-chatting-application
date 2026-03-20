@@ -2,16 +2,15 @@
 #include "../include/auth.h"
 #include "../include/ui.h"
 #include "../include/screen.h"
-#include "../include/fileio.h"
+#include "../include/client_socket.h"
 #include <string.h>
 #include <stdio.h>
 
-/* Sets up input field positions, button labels and initial mode.
- * startAsRegister=true opens in Register mode, false opens in Login mode. */
+/* Sets up input field positions, button labels and initial mode, startAsRegister=true opens in Register mode, false opens in Login mode. */
 void InitAuthScreen(AuthScreen *as, bool startAsRegister)
 {
     int cx = 860 / 2;
-    int cardX = cx - 180; /* Card is 360px wide, centered */
+    int cardX = cx - 180;
     int cardY = 100;
 
     as->mode = startAsRegister ? AUTH_REGISTER : AUTH_LOGIN;
@@ -48,7 +47,7 @@ void InitAuthScreen(AuthScreen *as, bool startAsRegister)
     as->messageIsOk = false;
 }
 
-/* Handles all Auth Screen logic — field input, form submission, mode switching and navigation */
+/* Handles all Auth Screen logic — field input, form submission, mode switching and navigation Sends REGISTER or LOGIN requests to the server and reads the reply. */
 AppScreen UpdateAuthScreen(AuthScreen *as, char *loggedInUser)
 {
     /* Activate the clicked field, deactivate the other */
@@ -100,33 +99,63 @@ AppScreen UpdateAuthScreen(AuthScreen *as, char *loggedInUser)
 
         if (as->mode == AUTH_REGISTER)
         {
-            /* Registration — check for duplicate username before saving */
-            if (UserExists(username))
+            /* Build request: "REGISTER:username:password", send to server where server checks for duplicates and saves Server replies: "OK" or "FAIL:USERNAME_TAKEN" */
+            char request[BUFFER_SIZE];
+            char reply[BUFFER_SIZE];
+            snprintf(request, sizeof(request),
+                     "REGISTER:%s:%s", username, password);
+
+            if (!SendRequest(request, reply, sizeof(reply)))
+            {
+                strcpy(as->message, "Server connection error!");
+                as->messageIsOk = false;
+                as->messageTimer = 2.5f;
+                return SCREEN_AUTH;
+            }
+
+            if (strncmp(reply, "OK", 2) == 0)
+            {
+                /* Registration succeeded — log in immediately */
+                strncpy(loggedInUser, username, 49);
+                strcpy(as->message, "Account created! Welcome!");
+                as->messageIsOk = true;
+                as->messageTimer = 2.0f;
+                return SCREEN_CHAT;
+            }
+            else if (strstr(reply, "USERNAME_TAKEN"))
             {
                 strcpy(as->message, "Username already taken!");
                 as->messageIsOk = false;
                 as->messageTimer = 2.5f;
                 return SCREEN_AUTH;
             }
-
-            /* Save new user to users.txt and log them in immediately */
-            User newUser;
-            strncpy(newUser.username, username, MAX_USERNAME - 1);
-            strncpy(newUser.password, password, MAX_PASSWORD - 1);
-            SaveUser(&newUser);
-
-            strncpy(loggedInUser, username, MAX_USERNAME - 1);
-            strcpy(as->message, "Account created! Welcome!");
-            as->messageIsOk = true;
-            as->messageTimer = 2.0f;
-            return SCREEN_CHAT;
+            else
+            {
+                strcpy(as->message, "Registration failed!");
+                as->messageIsOk = false;
+                as->messageTimer = 2.5f;
+                return SCREEN_AUTH;
+            }
         }
         else
         {
-            /* Login — validate credentials against users.txt */
-            if (ValidateLogin(username, password))
+            /* Build request: "LOGIN:username:password", send to server then server validates against users.txt. Server replies: "OK" or "FAIL:INVALID_CREDENTIALS" */
+            char request[BUFFER_SIZE];
+            char reply[BUFFER_SIZE];
+            snprintf(request, sizeof(request),
+                     "LOGIN:%s:%s", username, password);
+
+            if (!SendRequest(request, reply, sizeof(reply)))
             {
-                strncpy(loggedInUser, username, MAX_USERNAME - 1);
+                strcpy(as->message, "Server connection error!");
+                as->messageIsOk = false;
+                as->messageTimer = 2.5f;
+                return SCREEN_AUTH;
+            }
+
+            if (strncmp(reply, "OK", 2) == 0)
+            {
+                strncpy(loggedInUser, username, 49);
                 strcpy(as->message, "Login successful!");
                 as->messageIsOk = true;
                 as->messageTimer = 2.0f;
