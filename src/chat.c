@@ -88,47 +88,100 @@ void LoadChatForPeer(ChatScreen *cs, const char *peer)
     cs->chatMessageCount = 0;
     cs->scrollOffset = 0;
 
-    /* LOADMSGS request - Ask server for all messages between currentUser and peer. Server replies with: MSG:sender:recip:content:HH:MM\n...END\n */
     char request[BUFFER_SIZE];
     char reply[BUFFER_SIZE * 4];
+    memset(reply, 0, sizeof(reply));
 
     snprintf(request, sizeof(request),
              "LOADMSGS:%s:%s", cs->currentUser, peer);
 
-    if (SendRequest(request, reply, sizeof(reply)))
+    if (!SendRequest(request, reply, sizeof(reply)))
+        return;
+
+    /* Parse reply line by line manually — avoids strtok re-entrancy issue.
+     * Each line is: MSG:sender:recipient:content:HH:MM
+     * We walk through the buffer character by character to extract lines. */
+    char *pos = reply;
+
+    while (*pos != '\0' && cs->chatMessageCount < MAX_CHAT_MESSAGES)
     {
-        /* Parse each MSG:sender:recipient:content:timestamp line */
-        char *line = strtok(reply, "\n");
-        while (line != NULL && cs->allMessageCount < MAX_MESSAGES)
+        /* Find the end of this line */
+        char *lineEnd = strchr(pos, '\n');
+        if (lineEnd == NULL)
+            break;
+
+        /* Copy this line into a temp buffer */
+        int lineLen = (int)(lineEnd - pos);
+        if (lineLen <= 0)
         {
-            if (strncmp(line, "MSG:", 4) == 0)
-            {
-                /* Parse the four fields after "MSG:" */
-                char temp[BUFFER_SIZE];
-                strncpy(temp, line + 4, sizeof(temp) - 1);
-
-                char *p1 = strtok(temp, ":"); /* sender    */
-                char *p2 = strtok(NULL, ":"); /* recipient */
-                char *p3 = strtok(NULL, ":"); /* content   */
-                char *p4 = strtok(NULL, ":"); /* hour      */
-                char *p5 = strtok(NULL, ":"); /* minute    */
-
-                if (p1 && p2 && p3 && p4 && p5)
-                {
-                    if (cs->chatMessageCount < MAX_CHAT_MESSAGES)
-                    {
-                        Message *m = &cs->chatMessages[cs->chatMessageCount];
-                        strncpy(m->sender, p1, MAX_USERNAME - 1);
-                        strncpy(m->recipient, p2, MAX_USERNAME - 1);
-                        strncpy(m->content, p3, MAX_MESSAGE - 1);
-                        snprintf(m->timestamp, sizeof(m->timestamp),
-                                 "%s:%s", p4, p5);
-                        cs->chatMessageCount++;
-                    }
-                }
-            }
-            line = strtok(NULL, "\n");
+            pos = lineEnd + 1;
+            continue;
         }
+
+        char line[BUFFER_SIZE];
+        memset(line, 0, sizeof(line));
+        strncpy(line, pos, lineLen);
+        pos = lineEnd + 1; /* Advance past this line */
+
+        /* Only process MSG: lines */
+        if (strncmp(line, "MSG:", 4) != 0)
+            continue;
+
+        /* Parse fields manually from "MSG:sender:recipient:content:HH:MM"
+         * Use strchr repeatedly to find each colon separator */
+        char *start = line + 4; /* Skip "MSG:" */
+
+        /* Field 1: sender */
+        char *sep = strchr(start, ':');
+        if (!sep)
+            continue;
+        *sep = '\0';
+        char sender[MAX_USERNAME] = {0};
+        strncpy(sender, start, MAX_USERNAME - 1);
+        start = sep + 1;
+
+        /* Field 2: recipient */
+        sep = strchr(start, ':');
+        if (!sep)
+            continue;
+        *sep = '\0';
+        char recipient[MAX_USERNAME] = {0};
+        strncpy(recipient, start, MAX_USERNAME - 1);
+        start = sep + 1;
+
+        /* Field 3 + 4+5: content and timestamp HH:MM
+         * Timestamp is always the last two colon-separated values.
+         * Use strrchr to find from the end to avoid splitting on
+         * colons that may appear inside the message content. */
+        char *lastColon = strrchr(start, ':');
+        if (!lastColon)
+            continue;
+        char mm[4] = {0};
+        strncpy(mm, lastColon + 1, 3);
+        mm[strcspn(mm, "\r\n ")] = '\0';
+        *lastColon = '\0';
+
+        char *hourColon = strrchr(start, ':');
+        if (!hourColon)
+            continue;
+        char hh[4] = {0};
+        strncpy(hh, hourColon + 1, 3);
+        hh[strcspn(hh, "\r\n ")] = '\0';
+        *hourColon = '\0';
+
+        char content[MAX_MESSAGE] = {0};
+        strncpy(content, start, MAX_MESSAGE - 1);
+
+        char timestamp[20] = {0};
+        snprintf(timestamp, sizeof(timestamp), "%s:%s", hh, mm);
+
+        /* Store in chatMessages[] */
+        Message *m = &cs->chatMessages[cs->chatMessageCount];
+        strncpy(m->sender, sender, MAX_USERNAME - 1);
+        strncpy(m->recipient, recipient, MAX_USERNAME - 1);
+        strncpy(m->content, content, MAX_MESSAGE - 1);
+        strncpy(m->timestamp, timestamp, 19);
+        cs->chatMessageCount++;
     }
 }
 

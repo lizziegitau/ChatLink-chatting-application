@@ -82,27 +82,30 @@ bool SendRequest(const char *request, char *replyBuf, int replyBufSize)
     /* Read the reply */
     memset(replyBuf, 0, replyBufSize);
     int totalReceived = 0;
-    int bytesReceived = 0;
 
-    /* Keep receiving until we get the full reply */
-    do
+    /* Keep receiving until we get the full reply ending with END\n or a single-line reply ending with \n */
+    while (totalReceived < replyBufSize - 1)
     {
-        bytesReceived = recv(clientSocket,
-                             replyBuf + totalReceived,
-                             replyBufSize - totalReceived - 1,
-                             0);
+        int bytesReceived = recv(clientSocket,
+                                 replyBuf + totalReceived,
+                                 replyBufSize - totalReceived - 1,
+                                 0);
+
         if (bytesReceived <= 0)
-            break;
+            break; /* Connection closed or error */
         totalReceived += bytesReceived;
+        replyBuf[totalReceived] = '\0';
 
-        /* Stop when we see END\n or a single-line reply ending in \n */
-        if (strstr(replyBuf, "END\n") ||
-            (totalReceived > 0 && replyBuf[totalReceived - 1] == '\n' &&
-             strncmp(replyBuf, "MSG:", 4) != 0 &&
-             strncmp(replyBuf, "USER:", 5) != 0))
+        /* Multi-line reply — wait for END\n which server always sends last */
+        if (strstr(replyBuf, "END\n") != NULL)
             break;
 
-    } while (bytesReceived > 0);
+        /* Single-line reply — has a \n and does NOT start with MSG: or USER: */
+        if (strchr(replyBuf, '\n') != NULL &&
+            strncmp(replyBuf, "MSG:", 4) != 0 &&
+            strncmp(replyBuf, "USER:", 5) != 0)
+            break;
+    }
 
     replyBuf[totalReceived] = '\0';
     return totalReceived > 0;
