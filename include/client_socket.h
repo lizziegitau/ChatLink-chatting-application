@@ -4,9 +4,9 @@
 
 #include <stdbool.h>
 
-#define SERVER_IP "127.0.0.1" /* Server runs on localhost */
-#define SERVER_PORT 8888      /* Port both sides must agree on */
-#define BUFFER_SIZE 4096      /* Max size of a single message */
+#define SERVER_IP "192.168.100.73" /* Change this to your server's IP address */
+#define SERVER_PORT 8888           /* Port both sides must agree on */
+#define BUFFER_SIZE 4096           /* Max size of a single message */
 
 /* Connects to the server*/
 bool ConnectToServer(void);
