@@ -4,7 +4,7 @@
 
 #include <stdbool.h>
 
-#define SERVER_IP "192.168.100.73" /* Change this to your server's IP address */
+#define SERVER_IP "172.23.182.163" /* Change this to your server's IP address */
 #define SERVER_PORT 8888           /* Port both sides must agree on */
 #define BUFFER_SIZE 4096           /* Max size of a single message */
 
