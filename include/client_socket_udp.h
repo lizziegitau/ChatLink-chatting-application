@@ -4,7 +4,7 @@
 
 #include <stdbool.h>
 
-#define SERVER_IP_UDP "172.23.182.163" /* Replace with your server IP */
+#define SERVER_IP_UDP "127.0.0.1" /* Replace with your server IP */
 #define SERVER_PORT_UDP 8889
 #define BUFFER_SIZE 4096
 

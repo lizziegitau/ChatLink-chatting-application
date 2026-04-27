@@ -1,40 +1,33 @@
 /* Implements the client-side UDP socket for the ChatLink UDP version */
 #include "../include/client_socket_udp.h"
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 
-/* The single UDP socket that is reused for every request */
-static SOCKET udpSocket = INVALID_SOCKET;
+/* The single UDP socket reused for every request */
+static int udpSocket = -1;
 static struct sockaddr_in serverAddr;
 
-/* Initialises Winsock and creates the UDP socket. No connect() as it is connectionless meaning no handshake */
+/* Creates the UDP socket. No connect() — connectionless, no handshake */
 bool InitUDPSocket(void)
 {
-    WSADATA wsaData;
-
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
-    {
-        printf("[UDP CLIENT] WSAStartup failed.\n");
-        return false;
-    }
-
-    /* Create a UDP socket */
-    udpSocket = socket(AF_INET, SOCK_DGRAM, 0); /* SOCK_DGRAM = UDP */
-    if (udpSocket == INVALID_SOCKET)
+    udpSocket = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udpSocket < 0)
     {
         printf("[UDP CLIENT] socket() failed.\n");
-        WSACleanup();
         return false;
     }
 
-    /* Set a receive timeout of 5 seconds so recvfrom() does not block forever if the server is unreachable */
-    DWORD timeout = 5000;
+    /* 5-second receive timeout using struct timeval (Linux style) */
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
     setsockopt(udpSocket, SOL_SOCKET, SO_RCVTIMEO,
-               (char *)&timeout, sizeof(timeout));
+               &timeout, sizeof(timeout));
 
-    /* Fill in server address which is used by every sendto() call */
     memset(&serverAddr, 0, sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(SERVER_PORT_UDP);
@@ -45,45 +38,40 @@ bool InitUDPSocket(void)
     return true;
 }
 
-/* Closes the UDP socket and cleans up Winsock */
+/* Closes the UDP socket */
 void CloseUDPSocket(void)
 {
-    if (udpSocket != INVALID_SOCKET)
+    if (udpSocket != -1)
     {
-        closesocket(udpSocket);
-        udpSocket = INVALID_SOCKET;
+        close(udpSocket);
+        udpSocket = -1;
     }
-    WSACleanup();
 }
 
-/* Sends one request packet and waits for one reply packet. This is the core of connectionless communication where sendto() fires the request at the server and recvfrom() waitsfor the reply to come back from the server */
+/* Sends one request packet and waits for the reply */
 bool SendRequestUDP(const char *request, char *replyBuf, int replyBufSize)
 {
-    if (udpSocket == INVALID_SOCKET)
+    if (udpSocket == -1)
         return false;
 
-    /* Build request with newline terminator */
     char msgBuf[BUFFER_SIZE];
     snprintf(msgBuf, sizeof(msgBuf), "%s\n", request);
 
-    /* sendto(): send request packet to server  */
-    int sent = sendto(udpSocket, msgBuf, (int)strlen(msgBuf), 0,
+    int sent = sendto(udpSocket, msgBuf, strlen(msgBuf), 0,
                       (struct sockaddr *)&serverAddr, sizeof(serverAddr));
-    if (sent == SOCKET_ERROR)
+    if (sent < 0)
     {
         printf("[UDP CLIENT] sendto() failed.\n");
         return false;
     }
 
-    /* recvfrom(): wait for reply packet from server */
     memset(replyBuf, 0, replyBufSize);
     int totalReceived = 0;
 
-    /* UDP can fragment large replies into multiple packets. So keep receiving until we get END\n or a single-line reply */
     while (totalReceived < replyBufSize - 1)
     {
         struct sockaddr_in fromAddr;
-        int fromLen = sizeof(fromAddr);
+        socklen_t fromLen = sizeof(fromAddr); /* socklen_t, not int */
 
         int bytesReceived = recvfrom(udpSocket,
                                      replyBuf + totalReceived,
@@ -91,7 +79,6 @@ bool SendRequestUDP(const char *request, char *replyBuf, int replyBufSize)
                                      0,
                                      (struct sockaddr *)&fromAddr,
                                      &fromLen);
-
         if (bytesReceived <= 0)
         {
             printf("[UDP CLIENT] recvfrom() timed out or failed.\n");
@@ -101,11 +88,9 @@ bool SendRequestUDP(const char *request, char *replyBuf, int replyBufSize)
         totalReceived += bytesReceived;
         replyBuf[totalReceived] = '\0';
 
-        /* For a multi-line reply, wait for END\n */
         if (strstr(replyBuf, "END\n") != NULL)
             break;
 
-        /* For a single-line reply, wait for \n */
         if (strchr(replyBuf, '\n') != NULL &&
             strncmp(replyBuf, "MSG:", 4) != 0 &&
             strncmp(replyBuf, "USER:", 5) != 0)
@@ -116,7 +101,7 @@ bool SendRequestUDP(const char *request, char *replyBuf, int replyBufSize)
     return totalReceived > 0;
 }
 
-/* Wrapper so auth.c, chat.c and search.c work is unchanged. SendRequest() calls now go through UDP instead of TCP */
+/* Wrapper so auth.c, chat.c and search.c are unchanged */
 bool SendRequest(const char *request, char *replyBuf, int replyBufSize)
 {
     return SendRequestUDP(request, replyBuf, replyBufSize);
