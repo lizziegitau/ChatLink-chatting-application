@@ -4,17 +4,12 @@
 
 #include <stdbool.h>
 
-#define SERVER_IP "172.23.182.163" /* Change this to your server's IP address */
-#define SERVER_PORT 8888           /* Port both sides must agree on */
-#define BUFFER_SIZE 4096           /* Max size of a single message */
+#define SERVER_IP "127.0.0.1" /* localhost — both client and server run in WSL */
+#define SERVER_PORT 8888
+#define BUFFER_SIZE 4096
 
-/* Connects to the server*/
 bool ConnectToServer(void);
-
-/* Disconnects from the server. Call on app exit. */
 void DisconnectFromServer(void);
-
-/* Sends a request string to the server and waits for a reply. Writes the server's reply into replyBuf */
 bool SendRequest(const char *request, char *replyBuf, int replyBufSize);
 
 #endif
